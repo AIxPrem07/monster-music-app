@@ -57,6 +57,8 @@ async function fetchCloudAudioStream(youtubeUrl: string, youtubeId: string): Pro
   duration?: number;
   thumbnailUrl?: string;
 }> {
+  const debugLogs: string[] = [];
+
   // Provider 1: Piped Open-Source API Instances (High Speed Direct CDN Streams)
   const pipedInstances = [
     'https://pipedapi.kavin.rocks',
@@ -64,6 +66,11 @@ async function fetchCloudAudioStream(youtubeUrl: string, youtubeId: string): Pro
     'https://pipedapi.tokhmi.xyz',
     'https://pipedapi.mha.fi',
     'https://piped-api.garudalinux.org',
+    'https://pipedapi.syncpundit.io',
+    'https://pi.ggtyler.dev',
+    'https://pipedapi.us.projectsegfau.lt',
+    'https://piped-api.lunar.icu',
+    'https://pipedapi.smnz.de'
   ];
 
   for (const inst of pipedInstances) {
@@ -94,8 +101,8 @@ async function fetchCloudAudioStream(youtubeUrl: string, youtubeId: string): Pro
           }
         }
       }
-    } catch (e) {
-      console.warn(`[Monster] Piped API ${inst} error:`, e);
+    } catch (e: any) {
+      debugLogs.push(`Piped (${inst}): ${e.message}`);
     }
   }
 
@@ -138,8 +145,8 @@ async function fetchCloudAudioStream(youtubeUrl: string, youtubeId: string): Pro
           }
         }
       }
-    } catch (e) {
-      console.warn(`[Monster] Cobalt API endpoint ${endpoint} error:`, e);
+    } catch (e: any) {
+      debugLogs.push(`Cobalt (${endpoint}): ${e.message}`);
     }
   }
 
@@ -148,6 +155,13 @@ async function fetchCloudAudioStream(youtubeUrl: string, youtubeId: string): Pro
     'https://inv.tux.pizza',
     'https://invidious.nerdvpn.de',
     'https://invidious.drgns.space',
+    'https://invidious.jing.rocks',
+    'https://inv.vern.cc',
+    'https://invidious.slipfox.xyz',
+    'https://invidious.weblibre.org',
+    'https://invidious.perennialte.ch',
+    'https://invidious.flokinet.to',
+    'https://invidious.privacydev.net'
   ];
 
   for (const inst of invidiousInstances) {
@@ -176,8 +190,8 @@ async function fetchCloudAudioStream(youtubeUrl: string, youtubeId: string): Pro
           }
         }
       }
-    } catch (e) {
-      console.warn(`[Monster] Invidious ${inst} error:`, e);
+    } catch (e: any) {
+      debugLogs.push(`Invidious (${inst}): ${e.message}`);
     }
   }
 
@@ -201,8 +215,8 @@ async function fetchCloudAudioStream(youtubeUrl: string, youtubeId: string): Pro
         thumbnailUrl: ytInfo.video_details.thumbnails?.[0]?.url,
       };
     }
-  } catch (e) {
-    console.warn('[Monster] play-dl error:', e);
+  } catch (e: any) {
+    debugLogs.push(`play-dl: ${e.message}`);
   }
 
   // Provider 5: @distube/ytdl-core Fallback
@@ -225,8 +239,8 @@ async function fetchCloudAudioStream(youtubeUrl: string, youtubeId: string): Pro
         duration: parseInt(info.videoDetails?.lengthSeconds || '240', 10),
       };
     }
-  } catch (e) {
-    console.warn('[Monster] ytdl-core error:', e);
+  } catch (e: any) {
+    debugLogs.push(`ytdl-core: ${e.message}`);
   }
 
   // Provider 6: Ultimate Serverless Native yt-dlp Fallback (Downloads Linux binary at runtime if not exists)
@@ -263,12 +277,14 @@ async function fetchCloudAudioStream(youtubeUrl: string, youtubeId: string): Pro
           return { buffer };
         }
       }
+    } else {
+      debugLogs.push(`yt-dlp: outPath ${outPath} missing after execution`);
     }
-  } catch (e) {
-    console.warn('[Monster] Ultimate yt-dlp fallback error:', e);
+  } catch (e: any) {
+    debugLogs.push(`yt-dlp: ${e.message}`);
   }
 
-  throw new Error('All online cloud audio extractors (Piped, Cobalt, Invidious, play-dl, ytdl-core, standalone yt-dlp) failed to retrieve audio stream.');
+  throw new Error(`Cloud extraction failed. Logs: ${debugLogs.join(' | ')}`);
 }
 
 export async function POST(request: Request) {
