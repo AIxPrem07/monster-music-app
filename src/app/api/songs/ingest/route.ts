@@ -2,14 +2,17 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { S3Client, PutObjectCommand, HeadObjectCommand } from '@aws-sdk/client-s3';
 import ytdl from '@distube/ytdl-core';
+import play from 'play-dl';
 import { exec } from 'child_process';
 import { promisify } from 'util';
-import { readdir, readFile, rm, mkdtemp } from 'fs/promises';
+import { readdir, readFile, rm, mkdtemp, chmod } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
 const execAsync = promisify(exec);
+
+export const maxDuration = 60; // Allow Vercel functions up to 60 seconds (Hobby limit) to process downloads
 
 const r2 = new S3Client({
   region: 'auto',
@@ -178,7 +181,31 @@ async function fetchCloudAudioStream(youtubeUrl: string, youtubeId: string): Pro
     }
   }
 
-  // Provider 4: @distube/ytdl-core Fallback
+  // Provider 4: play-dl Fallback (Highly Reliable Node Native YouTube Scraper)
+  try {
+    console.log(`[Monster] Trying play-dl fallback...`);
+    const streamInfo = await play.stream(youtubeUrl, { quality: 2 }); // quality 2 is highest audio
+    const ytInfo = await play.video_info(youtubeUrl);
+    const chunks: Buffer[] = [];
+    for await (const chunk of streamInfo.stream) {
+      chunks.push(Buffer.from(chunk));
+    }
+    const buffer = Buffer.concat(chunks);
+    if (buffer.length > 50_000) {
+      console.log(`[Monster] ✓ play-dl succeeded: ${(buffer.length / 1024 / 1024).toFixed(2)} MB`);
+      return {
+        buffer,
+        title: ytInfo.video_details.title,
+        artist: ytInfo.video_details.channel?.name,
+        duration: ytInfo.video_details.durationInSec,
+        thumbnailUrl: ytInfo.video_details.thumbnails?.[0]?.url,
+      };
+    }
+  } catch (e) {
+    console.warn('[Monster] play-dl error:', e);
+  }
+
+  // Provider 5: @distube/ytdl-core Fallback
   try {
     console.log(`[Monster] Trying ytdl-core fallback...`);
     const info = await ytdl.getInfo(youtubeUrl);
@@ -202,7 +229,50 @@ async function fetchCloudAudioStream(youtubeUrl: string, youtubeId: string): Pro
     console.warn('[Monster] ytdl-core error:', e);
   }
 
-  throw new Error('All online cloud audio extractors (Piped, Cobalt, Invidious, ytdl-core) failed to retrieve audio stream.');
+  // Provider 6: Ultimate Serverless Native yt-dlp Fallback (Downloads Linux binary at runtime if not exists)
+  try {
+    console.log(`[Monster] Trying ultimate yt-dlp serverless fallback...`);
+    const ytdlpPath = join(tmpdir(), 'yt-dlp');
+    if (!existsSync(ytdlpPath)) {
+      console.log('[Monster] Downloading yt-dlp binary to /tmp...');
+      // Wait for download. yt-dlp is ~35MB, AWS Lambda connection is very fast.
+      await execAsync(`curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o ${ytdlpPath}`);
+      await chmod(ytdlpPath, 0o775);
+    }
+    console.log('[Monster] Extracting direct stream URL using local yt-dlp...');
+    const { stdout } = await execAsync(`${ytdlpPath} --get-url -f 140 "${youtubeUrl}"`);
+    const streamUrl = stdout.trim();
+    
+    if (streamUrl && streamUrl.startsWith('http')) {
+      const audioRes = await fetch(streamUrl);
+      if (audioRes.ok) {
+         const arrayBuf = await audioRes.arrayBuffer();
+         const buffer = Buffer.from(arrayBuf);
+         if (buffer.length > 50_000) {
+           console.log(`[Monster] ✓ Ultimate yt-dlp fallback succeeded: ${(buffer.length / 1024 / 1024).toFixed(2)} MB`);
+           
+           // Fetch metadata since we only got the URL
+           try {
+             const metaRes = await execAsync(`${ytdlpPath} --dump-json --no-playlist "${youtubeUrl}"`);
+             const meta = JSON.parse(metaRes.stdout);
+             return {
+               buffer,
+               title: meta.title,
+               artist: meta.uploader,
+               duration: meta.duration,
+               thumbnailUrl: meta.thumbnail,
+             };
+           } catch {
+             return { buffer };
+           }
+         }
+      }
+    }
+  } catch (e) {
+    console.warn('[Monster] Ultimate yt-dlp fallback error:', e);
+  }
+
+  throw new Error('All online cloud audio extractors (Piped, Cobalt, Invidious, play-dl, ytdl-core, standalone yt-dlp) failed to retrieve audio stream.');
 }
 
 export async function POST(request: Request) {
