@@ -46,6 +46,123 @@ function getFFmpegDir(): string {
   return '/usr/bin';
 }
 
+// ── Multi-Provider Cloud Audio Extractor (Cobalt -> Invidious -> ytdl-core) ──
+async function fetchCloudAudioStream(youtubeUrl: string, youtubeId: string): Promise<{
+  buffer: Buffer;
+  title?: string;
+  artist?: string;
+  duration?: number;
+  thumbnailUrl?: string;
+}> {
+  // Provider 1: Cobalt API Instances
+  const cobaltEndpoints = [
+    'https://co.wuk.sh/api/json',
+    'https://api.cobalt.tools/api/json',
+    'https://cobalt.api.scipy.tech/api/json',
+  ];
+
+  for (const endpoint of cobaltEndpoints) {
+    try {
+      console.log(`[Monster] Trying Cobalt API: ${endpoint}...`);
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Accept': 'application/json',
+          'Content-Type': 'application/json',
+          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)',
+        },
+        body: JSON.stringify({
+          url: `https://www.youtube.com/watch?v=${youtubeId}`,
+          isAudioOnly: true,
+          audioFormat: 'mp3',
+        }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        const streamUrl = data.url || data.audio;
+        if (streamUrl) {
+          const audioRes = await fetch(streamUrl);
+          if (audioRes.ok) {
+            const arrayBuf = await audioRes.arrayBuffer();
+            const buffer = Buffer.from(arrayBuf);
+            if (buffer.length > 50_000) {
+              console.log(`[Monster] ✓ Cobalt API succeeded: ${(buffer.length / 1024 / 1024).toFixed(2)} MB`);
+              return { buffer };
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.warn(`[Monster] Cobalt API endpoint ${endpoint} error:`, e);
+    }
+  }
+
+  // Provider 2: Invidious API Instances
+  const invidiousInstances = [
+    'https://inv.tux.pizza',
+    'https://invidious.nerdvpn.de',
+    'https://invidious.drgns.space',
+  ];
+
+  for (const inst of invidiousInstances) {
+    try {
+      console.log(`[Monster] Trying Invidious API: ${inst}...`);
+      const res = await fetch(`${inst}/api/v1/videos/${youtubeId}`);
+      if (res.ok) {
+        const data = await res.json();
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const audioFormat = data.adaptiveFormats?.find((f: any) => f.type?.includes('audio') && f.url);
+        if (audioFormat?.url) {
+          const audioRes = await fetch(audioFormat.url);
+          if (audioRes.ok) {
+            const arrayBuf = await audioRes.arrayBuffer();
+            const buffer = Buffer.from(arrayBuf);
+            if (buffer.length > 50_000) {
+              console.log(`[Monster] ✓ Invidious API succeeded: ${(buffer.length / 1024 / 1024).toFixed(2)} MB`);
+              return {
+                buffer,
+                title: data.title,
+                artist: data.author,
+                duration: data.lengthSeconds,
+                thumbnailUrl: data.videoThumbnails?.[0]?.url,
+              };
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.warn(`[Monster] Invidious ${inst} error:`, e);
+    }
+  }
+
+  // Provider 3: @distube/ytdl-core Fallback
+  try {
+    console.log(`[Monster] Trying ytdl-core fallback...`);
+    const info = await ytdl.getInfo(youtubeUrl);
+    const audioFormat = ytdl.chooseFormat(info.formats, { filter: 'audioonly', quality: 'highestaudio' });
+    const stream = ytdl(youtubeUrl, { format: audioFormat });
+    const chunks: Buffer[] = [];
+    for await (const chunk of stream) {
+      chunks.push(Buffer.from(chunk));
+    }
+    const buffer = Buffer.concat(chunks);
+    if (buffer.length > 50_000) {
+      console.log(`[Monster] ✓ ytdl-core succeeded: ${(buffer.length / 1024 / 1024).toFixed(2)} MB`);
+      return {
+        buffer,
+        title: info.videoDetails?.title,
+        artist: info.videoDetails?.author?.name,
+        duration: parseInt(info.videoDetails?.lengthSeconds || '240', 10),
+      };
+    }
+  } catch (e) {
+    console.warn('[Monster] ytdl-core error:', e);
+  }
+
+  throw new Error('All online cloud audio extractors (Cobalt API, Invidious, ytdl-core) failed to retrieve audio stream.');
+}
+
 export async function POST(request: Request) {
   let tempDir: string | null = null;
 
@@ -88,80 +205,67 @@ export async function POST(request: Request) {
     let thumbnailUrl = `https://img.youtube.com/vi/${youtubeId}/hqdefault.jpg`;
     let duration = 240;
 
-    // ── Approach 1: Pure Node.js Cloud Extraction using @distube/ytdl-core ─────
+    // ── Step 1: Metadata (oEmbed) ──────────────────────────────────────────────
     try {
-      console.log(`[Monster] Attempting cloud audio extraction via ytdl-core for ${youtubeId}...`);
-      const info = await ytdl.getInfo(youtubeUrl);
-      if (info.videoDetails) {
-        if (info.videoDetails.title) title = info.videoDetails.title;
-        if (info.videoDetails.author?.name) artist = info.videoDetails.author.name;
-        if (info.videoDetails.lengthSeconds) {
-          const sec = parseInt(info.videoDetails.lengthSeconds, 10);
-          if (!isNaN(sec) && sec > 0) duration = sec;
-        }
-        const highestThumb = info.videoDetails.thumbnails?.pop()?.url;
-        if (highestThumb) thumbnailUrl = highestThumb;
+      const res = await fetch(
+        `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${youtubeId}&format=json`
+      );
+      if (res.ok) {
+        const d = await res.json();
+        if (d.title) title = d.title;
+        if (d.author_name) artist = d.author_name;
+        if (d.thumbnail_url) thumbnailUrl = d.thumbnail_url;
       }
+    } catch { /* use defaults */ }
 
-      const audioFormat = ytdl.chooseFormat(info.formats, { filter: 'audioonly', quality: 'highestaudio' });
-      const stream = ytdl(youtubeUrl, { format: audioFormat });
-
-      const chunks: Buffer[] = [];
-      for await (const chunk of stream) {
-        chunks.push(Buffer.from(chunk));
-      }
-      audioBuffer = Buffer.concat(chunks);
-      console.log(`[Monster] ✓ Cloud ytdl-core extracted ${(audioBuffer.length / 1024 / 1024).toFixed(2)} MB audio buffer.`);
+    // ── Step 2: Extract Audio (Online Cloud APIs First, then local yt-dlp) ─────
+    try {
+      const cloudResult = await fetchCloudAudioStream(youtubeUrl, youtubeId);
+      audioBuffer = cloudResult.buffer;
+      if (cloudResult.title) title = cloudResult.title;
+      if (cloudResult.artist) artist = cloudResult.artist;
+      if (cloudResult.duration) duration = cloudResult.duration;
+      if (cloudResult.thumbnailUrl) thumbnailUrl = cloudResult.thumbnailUrl;
     } catch (cloudErr) {
-      console.warn('[Monster] Cloud ytdl-core extraction failed/throttled. Trying local yt-dlp binary fallback...', cloudErr);
-    }
+      console.warn('[Monster] All cloud audio extractors failed. Trying local CLI fallback...', cloudErr);
 
-    // ── Approach 2: Fallback to local yt-dlp CLI binary if available ─────────
-    if (!audioBuffer || audioBuffer.length === 0) {
       const ytDlpPath = getYtDlpPath();
-      if (!ytDlpPath) {
-        return NextResponse.json(
-          {
-            error: 'Cloud audio extraction failed and yt-dlp binary is not installed on host.',
-            details: 'Could not extract YouTube audio stream via ytdl-core or local CLI.',
-          },
-          { status: 500 }
-        );
+      if (ytDlpPath) {
+        const FFMPEG = getFFmpegDir();
+        const ENV = { ...process.env, PATH: `/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:${process.env.PATH || ''}` };
+
+        tempDir = await mkdtemp(join(tmpdir(), 'monster-'));
+        const outputTemplate = join(tempDir, '%(id)s.%(ext)s');
+
+        const cmd = [
+          ytDlpPath,
+          '--extract-audio',
+          '--audio-format', 'mp3',
+          '--audio-quality', '0',
+          '--ffmpeg-location', FFMPEG,
+          '--output', `"${outputTemplate}"`,
+          '--no-playlist',
+          '--restrict-filenames',
+          '--',
+          `"https://www.youtube.com/watch?v=${youtubeId}"`,
+        ].join(' ');
+
+        console.log('[Monster] Running local yt-dlp CLI fallback:', cmd);
+        await execAsync(cmd, { timeout: 240_000, env: ENV });
+
+        const files = await readdir(tempDir);
+        const audioFile = files.find(f => f.endsWith('.mp3') || f.endsWith('.m4a') || f.endsWith('.opus') || f.endsWith('.webm'));
+        if (audioFile) {
+          audioBuffer = await readFile(join(tempDir, audioFile));
+        }
       }
-
-      const FFMPEG = getFFmpegDir();
-      const ENV = { ...process.env, PATH: `/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:${process.env.PATH || ''}` };
-
-      tempDir = await mkdtemp(join(tmpdir(), 'monster-'));
-      const outputTemplate = join(tempDir, '%(id)s.%(ext)s');
-
-      const cmd = [
-        ytDlpPath,
-        '--extract-audio',
-        '--audio-format', 'mp3',
-        '--audio-quality', '0',
-        '--ffmpeg-location', FFMPEG,
-        '--output', `"${outputTemplate}"`,
-        '--no-playlist',
-        '--restrict-filenames',
-        '--',
-        `"https://www.youtube.com/watch?v=${youtubeId}"`,
-      ].join(' ');
-
-      console.log('[Monster] Running CLI fallback:', cmd);
-      await execAsync(cmd, { timeout: 240_000, env: ENV });
-
-      const files = await readdir(tempDir);
-      const audioFile = files.find(f => f.endsWith('.mp3') || f.endsWith('.m4a') || f.endsWith('.opus') || f.endsWith('.webm'));
-      if (!audioFile) {
-        throw new Error('yt-dlp CLI ran but produced no output file');
-      }
-
-      audioBuffer = await readFile(join(tempDir, audioFile));
     }
 
     if (!audioBuffer || audioBuffer.length === 0) {
-      return NextResponse.json({ error: 'Failed to obtain audio stream for this track.' }, { status: 500 });
+      return NextResponse.json(
+        { error: 'Online audio extraction failed for this YouTube URL.', details: 'Could not fetch audio stream via Cobalt, Invidious, or ytdl-core cloud services.' },
+        { status: 500 }
+      );
     }
 
     // ── Step 3: Upload Audio Buffer directly to Cloudflare R2 ────────────────
