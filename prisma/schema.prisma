@@ -1,0 +1,76 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String       @id @default(cuid())
+  email         String       @unique
+  name          String
+  avatarUrl     String?
+  googleId      String?      @unique
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  songs         Song[]       @relation("UserUploadedSongs")
+  playlists     Playlist[]
+  likedSongs    LikedSong[]
+}
+
+model Song {
+  id            String       @id @default(cuid())
+  title         String
+  artist        String
+  duration      Int          // in seconds
+  youtubeUrl    String
+  youtubeId     String?
+  r2Key         String?
+  r2Url         String
+  thumbnailUrl  String
+  playsCount    Int          @default(0)
+  addedById     String?
+  addedBy       User?        @relation("UserUploadedSongs", fields: [addedById], references: [id], onDelete: SetNull)
+  createdAt     DateTime     @default(now())
+
+  playlistSongs PlaylistSong[]
+  likedBy       LikedSong[]
+}
+
+model Playlist {
+  id            String         @id @default(cuid())
+  name          String
+  description   String?
+  userId        String
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  songs         PlaylistSong[]
+}
+
+model PlaylistSong {
+  id            String    @id @default(cuid())
+  playlistId    String
+  playlist      Playlist  @relation(fields: [playlistId], references: [id], onDelete: Cascade)
+  songId        String
+  song          Song      @relation(fields: [songId], references: [id], onDelete: Cascade)
+  order         Int       @default(0)
+  addedAt       DateTime  @default(now())
+
+  @@unique([playlistId, songId])
+}
+
+model LikedSong {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  songId    String
+  song      Song     @relation(fields: [songId], references: [id], onDelete: Cascade)
+  likedAt   DateTime @default(now())
+
+  @@unique([userId, songId])
+}

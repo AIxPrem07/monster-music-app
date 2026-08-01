@@ -1,0 +1,273 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&family=Outfit:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500&display=swap');
+
+/* ─────────────────────────────────────────────────────────
+   DESIGN TOKENS
+───────────────────────────────────────────────────────── */
+:root {
+  /* Burgundy Red Palette */
+  --accent-primary:    #C70039;
+  --accent-hover:      #E0003F;
+  --accent-bright:     #FF2A55;
+  --accent-dark:       #800020;
+  --accent-muted:      rgba(199, 0, 57, 0.15);
+  --accent-glow:       rgba(199, 0, 57, 0.4);
+  --accent-gradient:   linear-gradient(135deg, #800020 0%, #C70039 60%, #FF2A55 100%);
+
+  /* Surfaces */
+  --bg-main:      #050408;
+  --bg-sidebar:   #080610;
+  --bg-s1:        #0F0C16;
+  --bg-s2:        #171320;
+  --bg-s3:        #1F1A2B;
+  --bg-glass:     rgba(15, 12, 22, 0.72);
+
+  /* Borders */
+  --border-0:   rgba(255,255,255,0.04);
+  --border-1:   rgba(255,255,255,0.08);
+  --border-2:   rgba(255,255,255,0.14);
+  --border-accent: rgba(199,0,57,0.4);
+
+  /* Text */
+  --text-1: #FDFCFE;
+  --text-2: #A89DB8;
+  --text-3: #6B6075;
+  --text-4: #3E3848;
+
+  /* Fonts */
+  --font-sans:    'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-display: 'Outfit', var(--font-sans);
+  --font-mono:    'JetBrains Mono', monospace;
+
+  /* Radius */
+  --r-xs:   6px;
+  --r-sm:   10px;
+  --r-md:   16px;
+  --r-lg:   24px;
+  --r-xl:   32px;
+  --r-full: 9999px;
+
+  /* Spacing */
+  --player-h:  90px;
+  --sidebar-w: 260px;
+
+  /* Transitions */
+  --t-fast:   0.12s cubic-bezier(0.4,0,0.2,1);
+  --t-normal: 0.22s cubic-bezier(0.4,0,0.2,1);
+  --t-slow:   0.38s cubic-bezier(0.4,0,0.2,1);
+  --t-spring: 0.45s cubic-bezier(0.34,1.56,0.64,1);
+}
+
+/* ─────────────────────────────────────────────────────────
+   RESET
+───────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; padding: 0; margin: 0; }
+
+html, body {
+  width: 100%; height: 100%;
+  background: var(--bg-main);
+  color: var(--text-1);
+  font-family: var(--font-sans);
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  user-select: none;
+}
+
+a { color: inherit; text-decoration: none; }
+button { cursor: pointer; border: none; background: none; font-family: inherit; color: inherit; outline: none; }
+input, textarea, select { font-family: inherit; color: inherit; }
+
+/* ─────────────────────────────────────────────────────────
+   SCROLLBARS
+───────────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: var(--r-full); }
+::-webkit-scrollbar-thumb:hover { background: var(--accent-primary); }
+
+/* ─────────────────────────────────────────────────────────
+   FOCUS
+───────────────────────────────────────────────────────── */
+:focus-visible { outline: 2px solid var(--accent-bright); outline-offset: 2px; border-radius: 4px; }
+
+/* ─────────────────────────────────────────────────────────
+   LAYOUT
+───────────────────────────────────────────────────────── */
+.app-layout {
+  display: flex;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  background: var(--bg-main);
+  position: relative;
+}
+
+/* Subtle noise texture overlay */
+.app-layout::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.03'/%3E%3C/svg%3E");
+  pointer-events: none;
+  z-index: 1000;
+  opacity: 0.4;
+}
+
+.main-scroll-area {
+  flex: 1;
+  height: 100vh;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-bottom: calc(var(--player-h) + 32px);
+  scrollbar-gutter: stable;
+  scroll-behavior: smooth;
+}
+
+@media (max-width: 768px) {
+  .main-scroll-area { padding-bottom: calc(var(--player-h) + 64px + 32px); }
+}
+
+/* ─────────────────────────────────────────────────────────
+   GLASS CARD
+───────────────────────────────────────────────────────── */
+.glass {
+  background: rgba(15, 12, 22, 0.6);
+  backdrop-filter: blur(24px) saturate(1.4);
+  -webkit-backdrop-filter: blur(24px) saturate(1.4);
+  border: 1px solid var(--border-1);
+  border-radius: var(--r-md);
+}
+
+.glass-hover {
+  transition: border-color var(--t-normal), box-shadow var(--t-normal), transform var(--t-normal);
+}
+.glass-hover:hover {
+  border-color: var(--border-accent);
+  box-shadow: 0 16px 48px rgba(199,0,57,0.14);
+  transform: translateY(-3px);
+}
+
+/* ─────────────────────────────────────────────────────────
+   ANIMATIONS
+───────────────────────────────────────────────────────── */
+@keyframes eq-bounce {
+  0%,100% { transform: scaleY(0.3); }
+  50%      { transform: scaleY(1); }
+}
+.eq-bar {
+  width: 3px;
+  height: 16px;
+  background: var(--accent-primary);
+  border-radius: 2px;
+  transform-origin: bottom;
+  animation: eq-bounce 0.9s ease-in-out infinite;
+  box-shadow: 0 0 6px var(--accent-glow);
+}
+.eq-bar:nth-child(1) { animation-delay: 0s; }
+.eq-bar:nth-child(2) { animation-delay: 0.2s; }
+.eq-bar:nth-child(3) { animation-delay: 0.1s; }
+.eq-bar:nth-child(4) { animation-delay: 0.3s; }
+
+@keyframes pulse-ring {
+  0%   { transform: scale(1);   opacity: 0.6; }
+  100% { transform: scale(1.6); opacity: 0; }
+}
+.pulse-ring {
+  position: absolute; inset: -8px;
+  border-radius: 50%;
+  border: 2px solid var(--accent-primary);
+  animation: pulse-ring 1.8s ease-out infinite;
+}
+
+@keyframes shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position:  200% 0; }
+}
+.shimmer {
+  background: linear-gradient(90deg,
+    var(--bg-s1) 25%,
+    var(--bg-s2) 50%,
+    var(--bg-s1) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.4s infinite;
+}
+
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.fade-up { animation: fade-up 0.4s var(--t-normal) forwards; }
+
+@keyframes slide-up {
+  from { transform: translateY(100%); }
+  to   { transform: translateY(0); }
+}
+
+@keyframes vinyl-spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+.vinyl-spin { animation: vinyl-spin 10s linear infinite; }
+
+@keyframes float {
+  0%,100% { transform: translateY(0); }
+  50%      { transform: translateY(-6px); }
+}
+
+@keyframes glow-pulse {
+  0%,100% { box-shadow: 0 0 20px var(--accent-glow); }
+  50%      { box-shadow: 0 0 40px rgba(255,42,85,0.6); }
+}
+.glow-pulse { animation: glow-pulse 2.5s ease-in-out infinite; }
+
+/* ─────────────────────────────────────────────────────────
+   BUTTON UTILITIES
+───────────────────────────────────────────────────────── */
+.btn-primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--accent-gradient);
+  color: #FFF;
+  font-weight: 700;
+  padding: 12px 24px;
+  border-radius: var(--r-full);
+  font-size: 0.9rem;
+  white-space: nowrap;
+  transition: transform var(--t-normal), box-shadow var(--t-normal);
+  box-shadow: 0 4px 20px var(--accent-glow);
+}
+.btn-primary:hover { transform: translateY(-2px); box-shadow: 0 8px 32px rgba(255,42,85,0.5); }
+.btn-primary:active { transform: translateY(0); }
+
+.btn-ghost {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: transparent;
+  color: var(--text-2);
+  font-weight: 600;
+  padding: 11px 22px;
+  border-radius: var(--r-full);
+  font-size: 0.9rem;
+  white-space: nowrap;
+  border: 1px solid var(--border-1);
+  transition: all var(--t-normal);
+}
+.btn-ghost:hover { border-color: var(--border-2); color: var(--text-1); background: rgba(255,255,255,0.04); }
+
+.selectable { user-select: text; }
+
+/* ─────────────────────────────────────────────────────────
+   SIDEBAR OFFSET (login page uses full screen)
+───────────────────────────────────────────────────────── */
+.login-fullscreen {
+  width: 100vw;
+  height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-main);
+  overflow: hidden;
+}
