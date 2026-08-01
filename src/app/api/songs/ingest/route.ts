@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { S3Client, PutObjectCommand, HeadObjectCommand } from '@aws-sdk/client-s3';
 import ytdl from '@distube/ytdl-core';
-import play from 'play-dl';
+import yt from 'youtube-ext';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import { readdir, readFile, rm, mkdtemp, chmod, writeFile } from 'fs/promises';
@@ -242,19 +242,53 @@ async function fetchCloudAudioStream(youtubeUrl: string, youtubeId: string): Pro
   } catch (e: any) {
     debugLogs.push(`ytdl-core: ${e.message}`);
   }
+  // Provider 5.5: youtube-ext Fallback (Node library)
+  try {
+    console.log(`[Monster] Trying youtube-ext fallback...`);
+    const vidInfo = await yt.videoInfo(youtubeUrl);
+    const audioFormat = vidInfo.formats?.find((f: any) => f.audio && !f.video);
+    if (audioFormat?.url) {
+      const res = await fetch(audioFormat.url);
+      if (res.ok) {
+        const arrayBuf = await res.arrayBuffer();
+        const buffer = Buffer.from(arrayBuf);
+        if (buffer.length > 50_000) {
+          console.log(`[Monster] ✓ youtube-ext succeeded: ${(buffer.length / 1024 / 1024).toFixed(2)} MB`);
+          return {
+            buffer,
+            title: vidInfo.title,
+            artist: vidInfo.channel?.name,
+            duration: vidInfo.duration,
+            thumbnailUrl: vidInfo.thumbnails?.[0]?.url,
+          };
+        }
+      }
+    }
+  } catch (e: any) {
+    debugLogs.push(`youtube-ext: ${e.message}`);
+  }
 
-  // Provider 6: Ultimate Serverless Native yt-dlp Fallback (Downloads Linux binary at runtime if not exists)
+
+
+  // Provider 6: Ultimate Serverless Native yt-dlp Fallback (Downloads static binary at runtime if not exists)
   try {
     console.log(`[Monster] Trying ultimate yt-dlp serverless fallback...`);
     const ytdlpPath = join(tmpdir(), 'yt-dlp');
-    if (!existsSync(ytdlpPath)) {
-      console.log('[Monster] Downloading yt-dlp binary to /tmp using fetch...');
-      const dlRes = await fetch('https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp');
-      if (!dlRes.ok) throw new Error(`Failed to download yt-dlp: ${dlRes.statusText}`);
-      const buf = await dlRes.arrayBuffer();
-      await writeFile(ytdlpPath, Buffer.from(buf));
-      await chmod(ytdlpPath, 0o775);
-    }
+      if (!existsSync(ytdlpPath)) {
+        console.log('[Monster] Downloading static yt-dlp binary (no Python) to /tmp using fetch...');
+        const dlRes = await fetch('https://cdn.jsdelivr.net/gh/yt-dlp/yt-dlp@master/yt-dlp_linux');
+        if (!dlRes.ok) {
+          // fallback to GitHub release if CDN fails
+          const fallbackRes = await fetch('https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux');
+          if (!fallbackRes.ok) throw new Error(`Failed to download yt-dlp binary: ${fallbackRes.statusText}`);
+          const fallbackBuf = await fallbackRes.arrayBuffer();
+          await writeFile(ytdlpPath, Buffer.from(fallbackBuf));
+        } else {
+          const buf = await dlRes.arrayBuffer();
+          await writeFile(ytdlpPath, Buffer.from(buf));
+        }
+        await chmod(ytdlpPath, 0o775);
+      }
     console.log('[Monster] Downloading audio using local yt-dlp...');
     const outPath = join(tmpdir(), `yt-${youtubeId}.m4a`);
     await execAsync(`${ytdlpPath} -f 140 -o "${outPath}" "${youtubeUrl}"`);
