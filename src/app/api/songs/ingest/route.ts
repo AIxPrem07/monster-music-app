@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { S3Client, PutObjectCommand, HeadObjectCommand } from '@aws-sdk/client-s3';
 import ytdl from '@distube/ytdl-core';
+import play from 'play-dl';
 import yt from 'youtube-ext';
 import { exec } from 'child_process';
 import { promisify } from 'util';
@@ -245,8 +246,8 @@ async function fetchCloudAudioStream(youtubeUrl: string, youtubeId: string): Pro
   // Provider 5.5: youtube-ext Fallback (Node library)
   try {
     console.log(`[Monster] Trying youtube-ext fallback...`);
-    const vidInfo = await yt.videoInfo(youtubeUrl);
-    const audioFormat = vidInfo.formats?.find((f: any) => f.audio && !f.video);
+    const vidInfo: any = await yt.videoInfo(youtubeUrl);
+    const audioFormat = vidInfo?.formats?.find((f: any) => f.audio && !f.video) || vidInfo?.adaptiveFormats?.find((f: any) => f.mimeType?.includes('audio'));
     if (audioFormat?.url) {
       const res = await fetch(audioFormat.url);
       if (res.ok) {
@@ -257,9 +258,9 @@ async function fetchCloudAudioStream(youtubeUrl: string, youtubeId: string): Pro
           return {
             buffer,
             title: vidInfo.title,
-            artist: vidInfo.channel?.name,
+            artist: vidInfo.channel?.name || vidInfo.uploader,
             duration: vidInfo.duration,
-            thumbnailUrl: vidInfo.thumbnails?.[0]?.url,
+            thumbnailUrl: vidInfo.thumbnails?.[0]?.url || vidInfo.thumbnail,
           };
         }
       }
@@ -350,7 +351,7 @@ async function fetchCloudAudioStream(youtubeUrl: string, youtubeId: string): Pro
   }
 
   throw new Error(`Cloud extraction failed. Logs: ${debugLogs.join(' | ')}`);
-
+}
 
 export async function POST(request: Request) {
   let tempDir: string | null = null;
