@@ -5,7 +5,7 @@ import ytdl from '@distube/ytdl-core';
 import play from 'play-dl';
 import { exec } from 'child_process';
 import { promisify } from 'util';
-import { readdir, readFile, rm, mkdtemp, chmod } from 'fs/promises';
+import { readdir, readFile, rm, mkdtemp, chmod, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -234,38 +234,34 @@ async function fetchCloudAudioStream(youtubeUrl: string, youtubeId: string): Pro
     console.log(`[Monster] Trying ultimate yt-dlp serverless fallback...`);
     const ytdlpPath = join(tmpdir(), 'yt-dlp');
     if (!existsSync(ytdlpPath)) {
-      console.log('[Monster] Downloading yt-dlp binary to /tmp...');
-      // Wait for download. yt-dlp is ~35MB, AWS Lambda connection is very fast.
-      await execAsync(`curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o ${ytdlpPath}`);
+      console.log('[Monster] Downloading yt-dlp binary to /tmp using fetch...');
+      const dlRes = await fetch('https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp');
+      if (!dlRes.ok) throw new Error(`Failed to download yt-dlp: ${dlRes.statusText}`);
+      const buf = await dlRes.arrayBuffer();
+      await writeFile(ytdlpPath, Buffer.from(buf));
       await chmod(ytdlpPath, 0o775);
     }
-    console.log('[Monster] Extracting direct stream URL using local yt-dlp...');
-    const { stdout } = await execAsync(`${ytdlpPath} --get-url -f 140 "${youtubeUrl}"`);
-    const streamUrl = stdout.trim();
+    console.log('[Monster] Downloading audio using local yt-dlp...');
+    const outPath = join(tmpdir(), `yt-${youtubeId}.m4a`);
+    await execAsync(`${ytdlpPath} -f 140 -o "${outPath}" "${youtubeUrl}"`);
     
-    if (streamUrl && streamUrl.startsWith('http')) {
-      const audioRes = await fetch(streamUrl);
-      if (audioRes.ok) {
-         const arrayBuf = await audioRes.arrayBuffer();
-         const buffer = Buffer.from(arrayBuf);
-         if (buffer.length > 50_000) {
-           console.log(`[Monster] ✓ Ultimate yt-dlp fallback succeeded: ${(buffer.length / 1024 / 1024).toFixed(2)} MB`);
-           
-           // Fetch metadata since we only got the URL
-           try {
-             const metaRes = await execAsync(`${ytdlpPath} --dump-json --no-playlist "${youtubeUrl}"`);
-             const meta = JSON.parse(metaRes.stdout);
-             return {
-               buffer,
-               title: meta.title,
-               artist: meta.uploader,
-               duration: meta.duration,
-               thumbnailUrl: meta.thumbnail,
-             };
-           } catch {
-             return { buffer };
-           }
-         }
+    if (existsSync(outPath)) {
+      const buffer = await readFile(outPath);
+      if (buffer.length > 50_000) {
+        console.log(`[Monster] ✓ Ultimate yt-dlp fallback succeeded: ${(buffer.length / 1024 / 1024).toFixed(2)} MB`);
+        try {
+          const metaRes = await execAsync(`${ytdlpPath} --dump-json --no-playlist "${youtubeUrl}"`);
+          const meta = JSON.parse(metaRes.stdout);
+          return {
+            buffer,
+            title: meta.title,
+            artist: meta.uploader,
+            duration: meta.duration,
+            thumbnailUrl: meta.thumbnail,
+          };
+        } catch {
+          return { buffer };
+        }
       }
     }
   } catch (e) {
@@ -330,6 +326,8 @@ export async function POST(request: Request) {
       }
     } catch { /* use defaults */ }
 
+    let lastErrorMsg = 'Unknown error during extraction';
+
     // ── Step 2: Extract Audio (Online Cloud APIs First, then local yt-dlp) ─────
     try {
       const cloudResult = await fetchCloudAudioStream(youtubeUrl, youtubeId);
@@ -338,8 +336,9 @@ export async function POST(request: Request) {
       if (cloudResult.artist) artist = cloudResult.artist;
       if (cloudResult.duration) duration = cloudResult.duration;
       if (cloudResult.thumbnailUrl) thumbnailUrl = cloudResult.thumbnailUrl;
-    } catch (cloudErr) {
-      console.warn('[Monster] All cloud audio extractors failed. Trying local CLI fallback...', cloudErr);
+    } catch (cloudErr: unknown) {
+      lastErrorMsg = cloudErr instanceof Error ? cloudErr.message : String(cloudErr);
+      console.warn('[Monster] All cloud audio extractors failed. Trying local CLI fallback...', lastErrorMsg);
 
       const ytDlpPath = getYtDlpPath();
       if (ytDlpPath) {
@@ -363,19 +362,22 @@ export async function POST(request: Request) {
         ].join(' ');
 
         console.log('[Monster] Running local yt-dlp CLI fallback:', cmd);
-        await execAsync(cmd, { timeout: 240_000, env: ENV });
-
-        const files = await readdir(tempDir);
-        const audioFile = files.find(f => f.endsWith('.mp3') || f.endsWith('.m4a') || f.endsWith('.opus') || f.endsWith('.webm'));
-        if (audioFile) {
-          audioBuffer = await readFile(join(tempDir, audioFile));
+        try {
+          await execAsync(cmd, { timeout: 240_000, env: ENV });
+          const files = await readdir(tempDir);
+          const audioFile = files.find(f => f.endsWith('.mp3') || f.endsWith('.m4a') || f.endsWith('.opus') || f.endsWith('.webm'));
+          if (audioFile) {
+            audioBuffer = await readFile(join(tempDir, audioFile));
+          }
+        } catch (cliErr: unknown) {
+           lastErrorMsg += ` | Local CLI failed: ${cliErr instanceof Error ? cliErr.message : String(cliErr)}`;
         }
       }
     }
 
     if (!audioBuffer || audioBuffer.length === 0) {
       return NextResponse.json(
-        { error: 'Online audio extraction failed for this YouTube URL.', details: 'Could not fetch audio stream via Piped, Cobalt, Invidious, or ytdl-core cloud services.' },
+        { error: 'Online audio extraction failed for this YouTube URL.', details: lastErrorMsg },
         { status: 500 }
       );
     }
