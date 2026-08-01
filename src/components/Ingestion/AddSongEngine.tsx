@@ -72,7 +72,7 @@ export default function AddSongEngine() {
       <div className="hero">
         <div className="hero-badge">
           <Zap size={12} />
-          <span>YT-DLP · CLOUDFLARE R2 · NEON DB</span>
+          <span>LOVE · PEACE · PATIENCE</span>
         </div>
         <h1 className="hero-title">Import Any Track</h1>
         <p className="hero-sub">
