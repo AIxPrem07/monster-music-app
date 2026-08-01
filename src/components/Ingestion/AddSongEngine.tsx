@@ -41,7 +41,13 @@ export default function AddSongEngine() {
 
     try {
       const res  = await fetch('/api/songs/ingest', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ youtubeUrl: url }) });
-      const data = await res.json();
+      const rawText = await res.text();
+      let data: any = {};
+      try {
+        data = JSON.parse(rawText);
+      } catch {
+        throw new Error(`Server error (${res.status}): ${rawText.slice(0, 250)}`);
+      }
       if (!res.ok || !data.success) throw new Error(data.details ? `${data.error}: ${data.details}` : (data.error || 'Ingestion failed'));
 
       const song: Song = data.song;
