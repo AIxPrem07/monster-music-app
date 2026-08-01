@@ -24,7 +24,7 @@ const BUCKET = process.env.R2_BUCKET_NAME || 'monster-audio-bucket';
 const DOMAIN = process.env.R2_PUBLIC_DOMAIN || 'https://pub-1e7255ac313f45119d225a16850a670e.r2.dev';
 
 function extractYouTubeId(url: string): string | null {
-  const m = url.match(/^.*(youtu\.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=)([^#&?]{11}).*/);
+  const m = url.match(/^.*(youtu\.be\/|v\/|u\/\w\/|embed\/|shorts\/|watch\?v=|&v=)([^#&?]{11}).*/);
   return m?.[2] ?? null;
 }
 
@@ -46,7 +46,7 @@ function getFFmpegDir(): string {
   return '/usr/bin';
 }
 
-// ── Multi-Provider Cloud Audio Extractor (Cobalt -> Invidious -> ytdl-core) ──
+// ── Multi-Provider Cloud Audio Extractor (Piped -> Cobalt -> Invidious -> ytdl-core) ──
 async function fetchCloudAudioStream(youtubeUrl: string, youtubeId: string): Promise<{
   buffer: Buffer;
   title?: string;
@@ -54,7 +54,49 @@ async function fetchCloudAudioStream(youtubeUrl: string, youtubeId: string): Pro
   duration?: number;
   thumbnailUrl?: string;
 }> {
-  // Provider 1: Cobalt API Instances
+  // Provider 1: Piped Open-Source API Instances (High Speed Direct CDN Streams)
+  const pipedInstances = [
+    'https://pipedapi.kavin.rocks',
+    'https://api.piped.yt',
+    'https://pipedapi.tokhmi.xyz',
+    'https://pipedapi.mha.fi',
+    'https://piped-api.garudalinux.org',
+  ];
+
+  for (const inst of pipedInstances) {
+    try {
+      console.log(`[Monster] Trying Piped API: ${inst}...`);
+      const res = await fetch(`${inst}/streams/${youtubeId}`, {
+        headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)' },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const audioStream = data.audioStreams?.find((s: any) => s.url && (s.mimeType?.includes('audio') || s.format === 'M4A' || s.format === 'WEBMA'));
+        if (audioStream?.url) {
+          const audioRes = await fetch(audioStream.url);
+          if (audioRes.ok) {
+            const arrayBuf = await audioRes.arrayBuffer();
+            const buffer = Buffer.from(arrayBuf);
+            if (buffer.length > 50_000) {
+              console.log(`[Monster] ✓ Piped API (${inst}) succeeded: ${(buffer.length / 1024 / 1024).toFixed(2)} MB`);
+              return {
+                buffer,
+                title: data.title,
+                artist: data.uploader,
+                duration: data.duration,
+                thumbnailUrl: data.thumbnailUrl,
+              };
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.warn(`[Monster] Piped API ${inst} error:`, e);
+    }
+  }
+
+  // Provider 2: Cobalt API v10 Instances
   const cobaltEndpoints = [
     'https://co.wuk.sh/api/json',
     'https://api.cobalt.tools/api/json',
@@ -73,7 +115,7 @@ async function fetchCloudAudioStream(youtubeUrl: string, youtubeId: string): Pro
         },
         body: JSON.stringify({
           url: `https://www.youtube.com/watch?v=${youtubeId}`,
-          isAudioOnly: true,
+          downloadMode: 'audio',
           audioFormat: 'mp3',
         }),
       });
@@ -98,7 +140,7 @@ async function fetchCloudAudioStream(youtubeUrl: string, youtubeId: string): Pro
     }
   }
 
-  // Provider 2: Invidious API Instances
+  // Provider 3: Invidious API Instances
   const invidiousInstances = [
     'https://inv.tux.pizza',
     'https://invidious.nerdvpn.de',
@@ -136,7 +178,7 @@ async function fetchCloudAudioStream(youtubeUrl: string, youtubeId: string): Pro
     }
   }
 
-  // Provider 3: @distube/ytdl-core Fallback
+  // Provider 4: @distube/ytdl-core Fallback
   try {
     console.log(`[Monster] Trying ytdl-core fallback...`);
     const info = await ytdl.getInfo(youtubeUrl);
@@ -160,7 +202,7 @@ async function fetchCloudAudioStream(youtubeUrl: string, youtubeId: string): Pro
     console.warn('[Monster] ytdl-core error:', e);
   }
 
-  throw new Error('All online cloud audio extractors (Cobalt API, Invidious, ytdl-core) failed to retrieve audio stream.');
+  throw new Error('All online cloud audio extractors (Piped, Cobalt, Invidious, ytdl-core) failed to retrieve audio stream.');
 }
 
 export async function POST(request: Request) {
@@ -263,7 +305,7 @@ export async function POST(request: Request) {
 
     if (!audioBuffer || audioBuffer.length === 0) {
       return NextResponse.json(
-        { error: 'Online audio extraction failed for this YouTube URL.', details: 'Could not fetch audio stream via Cobalt, Invidious, or ytdl-core cloud services.' },
+        { error: 'Online audio extraction failed for this YouTube URL.', details: 'Could not fetch audio stream via Piped, Cobalt, Invidious, or ytdl-core cloud services.' },
         { status: 500 }
       );
     }
