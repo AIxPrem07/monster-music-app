@@ -4,14 +4,42 @@ import { S3Client, PutObjectCommand, HeadObjectCommand } from '@aws-sdk/client-s
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import { readdir, readFile, rm, mkdtemp } from 'fs/promises';
+import { existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
 const execAsync = promisify(exec);
 
-const YTDLP  = '/opt/homebrew/bin/yt-dlp';
-const FFMPEG = '/opt/homebrew/bin';
-const ENV    = { ...process.env, PATH: '/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/opt/homebrew/opt/deno/bin' };
+// Dynamically locate yt-dlp and ffmpeg across macOS Homebrew, Linux, and PATH
+function getYtDlpPath(): string {
+  if (process.env.YTDLP_PATH && existsSync(process.env.YTDLP_PATH)) return process.env.YTDLP_PATH;
+  const candidates = [
+    '/opt/homebrew/bin/yt-dlp',
+    '/usr/local/bin/yt-dlp',
+    '/usr/bin/yt-dlp',
+  ];
+  for (const c of candidates) {
+    if (existsSync(c)) return c;
+  }
+  return 'yt-dlp'; // fallback to shell PATH
+}
+
+function getFFmpegDir(): string {
+  if (process.env.FFMPEG_PATH && existsSync(process.env.FFMPEG_PATH)) return process.env.FFMPEG_PATH;
+  const candidates = [
+    '/opt/homebrew/bin',
+    '/usr/local/bin',
+    '/usr/bin',
+  ];
+  for (const c of candidates) {
+    if (existsSync(`${c}/ffmpeg`)) return c;
+  }
+  return '/usr/bin';
+}
+
+const YTDLP  = getYtDlpPath();
+const FFMPEG = getFFmpegDir();
+const ENV    = { ...process.env, PATH: `/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:${process.env.PATH || ''}` };
 
 const r2 = new S3Client({
   region: 'auto',
@@ -41,7 +69,6 @@ export async function POST(request: Request) {
     if (!youtubeId) return NextResponse.json({ error: 'Invalid YouTube URL format' }, { status: 400 });
 
     const r2Key = `songs/${youtubeId}.mp3`;
-    const r2Url = `${DOMAIN}/${r2Key}`;
 
     // ── Duplicate & R2 Existence Check ───────────────────────────────────────
     const existing = await prisma.song.findFirst({ where: { youtubeId } });
@@ -110,7 +137,10 @@ export async function POST(request: Request) {
       const ytdlpStderr = err.stderr || err.message || String(e);
       console.error('[Monster] yt-dlp failed:', ytdlpStderr);
       return NextResponse.json(
-        { error: 'yt-dlp download failed', details: ytdlpStderr.slice(0, 1000) },
+        {
+          error: 'yt-dlp binary not found or failed on server.',
+          details: `Executed command '${cmd}'. Result: ${ytdlpStderr.slice(0, 500)}. (Note: YouTube audio extraction requires yt-dlp + ffmpeg installed on the host environment).`
+        },
         { status: 500 }
       );
     }
@@ -174,14 +204,14 @@ export async function POST(request: Request) {
     if (existing) {
       song = await prisma.song.update({
         where: { id: existing.id },
-        data: { title, artist, duration, r2Key, r2Url, thumbnailUrl },
+        data: { title, artist, duration, r2Key, r2Url: `${DOMAIN}/${r2Key}`, thumbnailUrl },
         include: { addedBy: true },
       });
     } else {
       song = await prisma.song.create({
         data: {
           title, artist, duration, youtubeUrl, youtubeId,
-          r2Key, r2Url, thumbnailUrl, addedById: defaultUser.id,
+          r2Key, r2Url: `${DOMAIN}/${r2Key}`, thumbnailUrl, addedById: defaultUser.id,
         },
         include: { addedBy: true },
       });
