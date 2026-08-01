@@ -318,8 +318,39 @@ async function fetchCloudAudioStream(youtubeUrl: string, youtubeId: string): Pro
     debugLogs.push(`yt-dlp: ${e.message}`);
   }
 
+  // Provider 7: Proxy Service Fallback
+  try {
+    const proxyUrl = process.env.AUDIO_PROXY_URL;
+    if (proxyUrl) {
+      console.log(`[Monster] Trying proxy fallback at ${proxyUrl}...`);
+      const res = await fetch(proxyUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ youtubeUrl })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.buffer) {
+          const buffer = Buffer.from(data.buffer, 'base64');
+          if (buffer.length > 50_000) {
+            console.log(`[Monster] ✓ Proxy fallback succeeded`);
+            return {
+              buffer,
+              title: data.title,
+              artist: data.artist,
+              duration: data.duration,
+              thumbnailUrl: data.thumbnailUrl,
+            };
+          }
+        }
+      }
+    }
+  } catch (e: any) {
+    debugLogs.push(`proxy: ${e.message}`);
+  }
+
   throw new Error(`Cloud extraction failed. Logs: ${debugLogs.join(' | ')}`);
-}
+
 
 export async function POST(request: Request) {
   let tempDir: string | null = null;
