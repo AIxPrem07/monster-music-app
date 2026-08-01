@@ -1,9 +1,13 @@
 FROM node:20-alpine
 
-# Install Python 3, ffmpeg, curl, and yt-dlp
-RUN apk add --no-cache python3 ffmpeg curl && \
-    curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp && \
-    chmod a+rx /usr/local/bin/yt-dlp
+# Install Python 3, ffmpeg, curl (needed for yt-dlp)
+RUN apk add --no-cache python3 py3-pip ffmpeg curl
+
+# Install yt-dlp via pip (most reliable way on Alpine)
+RUN pip3 install --break-system-packages yt-dlp || pip3 install yt-dlp
+
+# Verify yt-dlp is installed
+RUN yt-dlp --version
 
 WORKDIR /app
 
@@ -14,4 +18,6 @@ COPY server.js ./
 
 EXPOSE 3001
 
-CMD ["npm", "start"]
+ENV PORT=3001
+
+CMD ["node", "server.js"]
