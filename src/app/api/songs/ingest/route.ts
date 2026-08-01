@@ -11,7 +11,7 @@ import { tmpdir } from 'os';
 const execAsync = promisify(exec);
 
 // Dynamically locate yt-dlp and ffmpeg across macOS Homebrew, Linux, and PATH
-function getYtDlpPath(): string {
+function getYtDlpPath(): string | null {
   if (process.env.YTDLP_PATH && existsSync(process.env.YTDLP_PATH)) return process.env.YTDLP_PATH;
   const candidates = [
     '/opt/homebrew/bin/yt-dlp',
@@ -21,7 +21,7 @@ function getYtDlpPath(): string {
   for (const c of candidates) {
     if (existsSync(c)) return c;
   }
-  return 'yt-dlp'; // fallback to shell PATH
+  return null;
 }
 
 function getFFmpegDir(): string {
@@ -36,10 +36,6 @@ function getFFmpegDir(): string {
   }
   return '/usr/bin';
 }
-
-const YTDLP  = getYtDlpPath();
-const FFMPEG = getFFmpegDir();
-const ENV    = { ...process.env, PATH: `/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:${process.env.PATH || ''}` };
 
 const r2 = new S3Client({
   region: 'auto',
@@ -93,6 +89,21 @@ export async function POST(request: Request) {
       console.log(`[Monster] Song ${youtubeId} in DB but missing from R2 bucket. Downloading & uploading now...`);
     }
 
+    // Check if yt-dlp is available on host OS (e.g. macOS local dev)
+    const ytDlpPath = getYtDlpPath();
+    if (!ytDlpPath) {
+      return NextResponse.json(
+        {
+          error: 'YouTube audio extraction is only available in local dev environment.',
+          details: 'Vercel serverless functions do not include yt-dlp + ffmpeg binaries. Please run ingestion from your local dev app (http://localhost:3001). Once imported, songs are saved to Cloudflare R2 and playable on your live site!'
+        },
+        { status: 400 }
+      );
+    }
+
+    const FFMPEG = getFFmpegDir();
+    const ENV = { ...process.env, PATH: `/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:${process.env.PATH || ''}` };
+
     // ── Step 1: Metadata (oEmbed) ──────────────────────────────────────────────
     let title        = `YouTube Track (${youtubeId})`;
     let artist       = 'YouTube Import';
@@ -116,7 +127,7 @@ export async function POST(request: Request) {
     const outputTemplate = join(tempDir, '%(id)s.%(ext)s');
 
     const cmd = [
-      YTDLP,
+      ytDlpPath,
       '--extract-audio',
       '--audio-format', 'mp3',
       '--audio-quality', '0',
@@ -138,8 +149,8 @@ export async function POST(request: Request) {
       console.error('[Monster] yt-dlp failed:', ytdlpStderr);
       return NextResponse.json(
         {
-          error: 'yt-dlp binary not found or failed on server.',
-          details: `Executed command '${cmd}'. Result: ${ytdlpStderr.slice(0, 500)}. (Note: YouTube audio extraction requires yt-dlp + ffmpeg installed on the host environment).`
+          error: 'yt-dlp execution failed.',
+          details: ytdlpStderr.slice(0, 500)
         },
         { status: 500 }
       );
@@ -161,7 +172,7 @@ export async function POST(request: Request) {
 
     try {
       const { stdout } = await execAsync(
-        `${YTDLP} --print duration "https://www.youtube.com/watch?v=${youtubeId}" --no-warnings`,
+        `${ytDlpPath} --print duration "https://www.youtube.com/watch?v=${youtubeId}" --no-warnings`,
         { env: ENV }
       );
       const d = parseInt(stdout.trim(), 10);
