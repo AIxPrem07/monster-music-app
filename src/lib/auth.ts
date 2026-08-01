@@ -16,25 +16,29 @@ export const authOptions: NextAuthOptions = {
   callbacks: {
     async signIn({ user, account }) {
       if (account?.provider === 'google' && user.email) {
-        // Upsert user in our custom Neon DB User table
-        await prisma.user.upsert({
-          where: { email: user.email },
-          update: {
-            name: user.name || 'Monster User',
-            avatarUrl: user.image || null,
-            googleId: account.providerAccountId,
-          },
-          create: {
-            email: user.email,
-            name: user.name || 'Monster User',
-            avatarUrl: user.image || null,
-            googleId: account.providerAccountId,
-          },
-        });
+        try {
+          // Upsert user in our custom Neon DB User table
+          await prisma.user.upsert({
+            where: { email: user.email },
+            update: {
+              name: user.name || 'Monster User',
+              avatarUrl: user.image || null,
+              googleId: account.providerAccountId,
+            },
+            create: {
+              email: user.email,
+              name: user.name || 'Monster User',
+              avatarUrl: user.image || null,
+              googleId: account.providerAccountId,
+            },
+          });
+        } catch (error) {
+          console.error('Error upserting user in DB during signIn:', error);
+        }
       }
       return true;
     },
-    async jwt({ token, user, account }) {
+    async jwt({ token, user }) {
       if (user) {
         token.email = user.email;
         token.name = user.name;
