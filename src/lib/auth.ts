@@ -5,11 +5,11 @@ import { prisma } from '@/lib/prisma';
 export const authOptions: NextAuthOptions = {
   providers: [
     GoogleProvider({
-      clientId: process.env.GOOGLE_CLIENT_ID!,
-      clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
+      clientId: process.env.GOOGLE_CLIENT_ID || 'PLACEHOLDER_CLIENT_ID',
+      clientSecret: process.env.GOOGLE_CLIENT_SECRET || 'PLACEHOLDER_CLIENT_SECRET',
     }),
   ],
-  secret: process.env.NEXTAUTH_SECRET,
+  secret: process.env.NEXTAUTH_SECRET || 'monster_music_app_super_secret_jwt_key_2026_fallback',
   session: {
     strategy: 'jwt',
   },
