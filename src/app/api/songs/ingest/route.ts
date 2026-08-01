@@ -50,7 +50,19 @@ function getFFmpegDir(): string {
   return '/usr/bin';
 }
 
-// ── Multi-Provider Cloud Audio Extractor (Piped -> Cobalt -> Invidious -> ytdl-core) ──
+// Helper for fast fetches with strict timeouts
+async function fetchWithTimeout(url: string, options: RequestInit = {}, timeoutMs = 2500) {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, { ...options, signal: controller.signal });
+    return res;
+  } finally {
+    clearTimeout(id);
+  }
+}
+
+// ── Multi-Provider Cloud Audio Extractor ──
 async function fetchCloudAudioStream(youtubeUrl: string, youtubeId: string): Promise<{
   buffer: Buffer;
   title?: string;
@@ -60,37 +72,63 @@ async function fetchCloudAudioStream(youtubeUrl: string, youtubeId: string): Pro
 }> {
   const debugLogs: string[] = [];
 
-  // Provider 1: Piped Open-Source API Instances (High Speed Direct CDN Streams)
+  // Provider 0: External Proxy (HIGH PRIORITY if configured)
+  const proxyUrl = process.env.AUDIO_PROXY_URL;
+  if (proxyUrl) {
+    try {
+      console.log(`[Monster] Trying primary proxy service at ${proxyUrl}...`);
+      const res = await fetchWithTimeout(proxyUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ youtubeUrl })
+      }, 20000);
+
+      if (res.ok) {
+        const data = await res.json();
+        if (data.buffer) {
+          const buffer = Buffer.from(data.buffer, 'base64');
+          if (buffer.length > 50_000) {
+            console.log(`[Monster] ✓ Proxy service succeeded`);
+            return {
+              buffer,
+              title: data.title,
+              artist: data.artist,
+              duration: data.duration,
+              thumbnailUrl: data.thumbnailUrl,
+            };
+          }
+        }
+      }
+    } catch (e: any) {
+      debugLogs.push(`proxy: ${e.message}`);
+    }
+  }
+
+  // Provider 1: Piped Open-Source API Instances (Top 3 with 2.5s timeouts)
   const pipedInstances = [
     'https://pipedapi.kavin.rocks',
     'https://api.piped.yt',
     'https://pipedapi.tokhmi.xyz',
-    'https://pipedapi.mha.fi',
-    'https://piped-api.garudalinux.org',
-    'https://pipedapi.syncpundit.io',
-    'https://pi.ggtyler.dev',
-    'https://pipedapi.us.projectsegfau.lt',
-    'https://piped-api.lunar.icu',
-    'https://pipedapi.smnz.de'
   ];
 
   for (const inst of pipedInstances) {
     try {
       console.log(`[Monster] Trying Piped API: ${inst}...`);
-      const res = await fetch(`${inst}/streams/${youtubeId}`, {
+      const res = await fetchWithTimeout(`${inst}/streams/${youtubeId}`, {
         headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)' },
-      });
+      }, 2500);
+
       if (res.ok) {
         const data = await res.json();
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const audioStream = data.audioStreams?.find((s: any) => s.url && (s.mimeType?.includes('audio') || s.format === 'M4A' || s.format === 'WEBMA'));
         if (audioStream?.url) {
-          const audioRes = await fetch(audioStream.url);
+          const audioRes = await fetchWithTimeout(audioStream.url, {}, 5000);
           if (audioRes.ok) {
             const arrayBuf = await audioRes.arrayBuffer();
             const buffer = Buffer.from(arrayBuf);
             if (buffer.length > 50_000) {
-              console.log(`[Monster] ✓ Piped API (${inst}) succeeded: ${(buffer.length / 1024 / 1024).toFixed(2)} MB`);
+              console.log(`[Monster] ✓ Piped API (${inst}) succeeded`);
               return {
                 buffer,
                 title: data.title,
@@ -107,17 +145,16 @@ async function fetchCloudAudioStream(youtubeUrl: string, youtubeId: string): Pro
     }
   }
 
-  // Provider 2: Cobalt API v10 Instances
+  // Provider 2: Cobalt API v10 Instances (2.5s timeout)
   const cobaltEndpoints = [
     'https://co.wuk.sh/api/json',
     'https://api.cobalt.tools/api/json',
-    'https://cobalt.api.scipy.tech/api/json',
   ];
 
   for (const endpoint of cobaltEndpoints) {
     try {
       console.log(`[Monster] Trying Cobalt API: ${endpoint}...`);
-      const res = await fetch(endpoint, {
+      const res = await fetchWithTimeout(endpoint, {
         method: 'POST',
         headers: {
           'Accept': 'application/json',
@@ -129,18 +166,18 @@ async function fetchCloudAudioStream(youtubeUrl: string, youtubeId: string): Pro
           downloadMode: 'audio',
           audioFormat: 'mp3',
         }),
-      });
+      }, 2500);
 
       if (res.ok) {
         const data = await res.json();
         const streamUrl = data.url || data.audio;
         if (streamUrl) {
-          const audioRes = await fetch(streamUrl);
+          const audioRes = await fetchWithTimeout(streamUrl, {}, 5000);
           if (audioRes.ok) {
             const arrayBuf = await audioRes.arrayBuffer();
             const buffer = Buffer.from(arrayBuf);
             if (buffer.length > 50_000) {
-              console.log(`[Monster] ✓ Cobalt API succeeded: ${(buffer.length / 1024 / 1024).toFixed(2)} MB`);
+              console.log(`[Monster] ✓ Cobalt API succeeded`);
               return { buffer };
             }
           }
@@ -151,35 +188,27 @@ async function fetchCloudAudioStream(youtubeUrl: string, youtubeId: string): Pro
     }
   }
 
-  // Provider 3: Invidious API Instances
+  // Provider 3: Invidious API Instances (2.5s timeout)
   const invidiousInstances = [
     'https://inv.tux.pizza',
-    'https://invidious.nerdvpn.de',
-    'https://invidious.drgns.space',
     'https://invidious.jing.rocks',
-    'https://inv.vern.cc',
-    'https://invidious.slipfox.xyz',
-    'https://invidious.weblibre.org',
-    'https://invidious.perennialte.ch',
-    'https://invidious.flokinet.to',
-    'https://invidious.privacydev.net'
   ];
 
   for (const inst of invidiousInstances) {
     try {
       console.log(`[Monster] Trying Invidious API: ${inst}...`);
-      const res = await fetch(`${inst}/api/v1/videos/${youtubeId}`);
+      const res = await fetchWithTimeout(`${inst}/api/v1/videos/${youtubeId}`, {}, 2500);
       if (res.ok) {
         const data = await res.json();
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const audioFormat = data.adaptiveFormats?.find((f: any) => f.type?.includes('audio') && f.url);
         if (audioFormat?.url) {
-          const audioRes = await fetch(audioFormat.url);
+          const audioRes = await fetchWithTimeout(audioFormat.url, {}, 5000);
           if (audioRes.ok) {
             const arrayBuf = await audioRes.arrayBuffer();
             const buffer = Buffer.from(arrayBuf);
             if (buffer.length > 50_000) {
-              console.log(`[Monster] ✓ Invidious API succeeded: ${(buffer.length / 1024 / 1024).toFixed(2)} MB`);
+              console.log(`[Monster] ✓ Invidious API succeeded`);
               return {
                 buffer,
                 title: data.title,
@@ -196,65 +225,18 @@ async function fetchCloudAudioStream(youtubeUrl: string, youtubeId: string): Pro
     }
   }
 
-  // Provider 4: play-dl Fallback (Highly Reliable Node Native YouTube Scraper)
-  try {
-    console.log(`[Monster] Trying play-dl fallback...`);
-    const streamInfo = await play.stream(youtubeUrl, { quality: 2 }); // quality 2 is highest audio
-    const ytInfo = await play.video_info(youtubeUrl);
-    const chunks: Buffer[] = [];
-    for await (const chunk of streamInfo.stream) {
-      chunks.push(Buffer.from(chunk));
-    }
-    const buffer = Buffer.concat(chunks);
-    if (buffer.length > 50_000) {
-      console.log(`[Monster] ✓ play-dl succeeded: ${(buffer.length / 1024 / 1024).toFixed(2)} MB`);
-      return {
-        buffer,
-        title: ytInfo.video_details.title,
-        artist: ytInfo.video_details.channel?.name,
-        duration: ytInfo.video_details.durationInSec,
-        thumbnailUrl: ytInfo.video_details.thumbnails?.[0]?.url,
-      };
-    }
-  } catch (e: any) {
-    debugLogs.push(`play-dl: ${e.message}`);
-  }
-
-  // Provider 5: @distube/ytdl-core Fallback
-  try {
-    console.log(`[Monster] Trying ytdl-core fallback...`);
-    const info = await ytdl.getInfo(youtubeUrl);
-    const audioFormat = ytdl.chooseFormat(info.formats, { filter: 'audioonly', quality: 'highestaudio' });
-    const stream = ytdl(youtubeUrl, { format: audioFormat });
-    const chunks: Buffer[] = [];
-    for await (const chunk of stream) {
-      chunks.push(Buffer.from(chunk));
-    }
-    const buffer = Buffer.concat(chunks);
-    if (buffer.length > 50_000) {
-      console.log(`[Monster] ✓ ytdl-core succeeded: ${(buffer.length / 1024 / 1024).toFixed(2)} MB`);
-      return {
-        buffer,
-        title: info.videoDetails?.title,
-        artist: info.videoDetails?.author?.name,
-        duration: parseInt(info.videoDetails?.lengthSeconds || '240', 10),
-      };
-    }
-  } catch (e: any) {
-    debugLogs.push(`ytdl-core: ${e.message}`);
-  }
-  // Provider 5.5: youtube-ext Fallback (Node library)
+  // Provider 4: youtube-ext Fallback
   try {
     console.log(`[Monster] Trying youtube-ext fallback...`);
     const vidInfo: any = await yt.videoInfo(youtubeUrl);
     const audioFormat = vidInfo?.formats?.find((f: any) => f.audio && !f.video) || vidInfo?.adaptiveFormats?.find((f: any) => f.mimeType?.includes('audio'));
     if (audioFormat?.url) {
-      const res = await fetch(audioFormat.url);
+      const res = await fetchWithTimeout(audioFormat.url, {}, 5000);
       if (res.ok) {
         const arrayBuf = await res.arrayBuffer();
         const buffer = Buffer.from(arrayBuf);
         if (buffer.length > 50_000) {
-          console.log(`[Monster] ✓ youtube-ext succeeded: ${(buffer.length / 1024 / 1024).toFixed(2)} MB`);
+          console.log(`[Monster] ✓ youtube-ext succeeded`);
           return {
             buffer,
             title: vidInfo.title,
@@ -269,85 +251,46 @@ async function fetchCloudAudioStream(youtubeUrl: string, youtubeId: string): Pro
     debugLogs.push(`youtube-ext: ${e.message}`);
   }
 
-
-
-  // Provider 6: Ultimate Serverless Native yt-dlp Fallback (Downloads static binary at runtime if not exists)
+  // Provider 5: play-dl Fallback
   try {
-    console.log(`[Monster] Trying ultimate yt-dlp serverless fallback...`);
-    const ytdlpPath = join(tmpdir(), 'yt-dlp');
-      if (!existsSync(ytdlpPath)) {
-        console.log('[Monster] Downloading static yt-dlp binary (no Python) to /tmp using fetch...');
-        const dlRes = await fetch('https://cdn.jsdelivr.net/gh/yt-dlp/yt-dlp@master/yt-dlp_linux');
-        if (!dlRes.ok) {
-          // fallback to GitHub release if CDN fails
-          const fallbackRes = await fetch('https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux');
-          if (!fallbackRes.ok) throw new Error(`Failed to download yt-dlp binary: ${fallbackRes.statusText}`);
-          const fallbackBuf = await fallbackRes.arrayBuffer();
-          await writeFile(ytdlpPath, Buffer.from(fallbackBuf));
-        } else {
-          const buf = await dlRes.arrayBuffer();
-          await writeFile(ytdlpPath, Buffer.from(buf));
-        }
-        await chmod(ytdlpPath, 0o775);
-      }
-    console.log('[Monster] Downloading audio using local yt-dlp...');
-    const outPath = join(tmpdir(), `yt-${youtubeId}.m4a`);
-    await execAsync(`${ytdlpPath} -f 140 -o "${outPath}" "${youtubeUrl}"`);
-    
-    if (existsSync(outPath)) {
-      const buffer = await readFile(outPath);
-      if (buffer.length > 50_000) {
-        console.log(`[Monster] ✓ Ultimate yt-dlp fallback succeeded: ${(buffer.length / 1024 / 1024).toFixed(2)} MB`);
-        try {
-          const metaRes = await execAsync(`${ytdlpPath} --dump-json --no-playlist "${youtubeUrl}"`);
-          const meta = JSON.parse(metaRes.stdout);
-          return {
-            buffer,
-            title: meta.title,
-            artist: meta.uploader,
-            duration: meta.duration,
-            thumbnailUrl: meta.thumbnail,
-          };
-        } catch {
+    console.log(`[Monster] Trying play-dl fallback...`);
+    const streamInfo = await play.stream(youtubeUrl, { quality: 2 });
+    const ytInfo = await play.video_info(youtubeUrl);
+    const chunks: Buffer[] = [];
+    for await (const chunk of streamInfo.stream) {
+      chunks.push(Buffer.from(chunk));
+    }
+    const buffer = Buffer.concat(chunks);
+    if (buffer.length > 50_000) {
+      console.log(`[Monster] ✓ play-dl succeeded`);
+      return {
+        buffer,
+        title: ytInfo.video_details.title,
+        artist: ytInfo.video_details.channel?.name,
+        duration: ytInfo.video_details.durationInSec,
+        thumbnailUrl: ytInfo.video_details.thumbnails?.[0]?.url,
+      };
+    }
+  } catch (e: any) {
+    debugLogs.push(`play-dl: ${e.message}`);
+  }
+
+  // Provider 6: Local yt-dlp binary (Only run if executable exists on local disk, do not download 15MB at runtime on Vercel)
+  const localYtDlp = getYtDlpPath();
+  if (localYtDlp) {
+    try {
+      console.log('[Monster] Downloading audio using local system yt-dlp...');
+      const outPath = join(tmpdir(), `yt-${youtubeId}.m4a`);
+      await execAsync(`${localYtDlp} -f 140 -o "${outPath}" "${youtubeUrl}"`, { timeout: 15000 });
+      if (existsSync(outPath)) {
+        const buffer = await readFile(outPath);
+        if (buffer.length > 50_000) {
           return { buffer };
         }
       }
-    } else {
-      debugLogs.push(`yt-dlp: outPath ${outPath} missing after execution`);
+    } catch (e: any) {
+      debugLogs.push(`local-yt-dlp: ${e.message}`);
     }
-  } catch (e: any) {
-    debugLogs.push(`yt-dlp: ${e.message}`);
-  }
-
-  // Provider 7: Proxy Service Fallback
-  try {
-    const proxyUrl = process.env.AUDIO_PROXY_URL;
-    if (proxyUrl) {
-      console.log(`[Monster] Trying proxy fallback at ${proxyUrl}...`);
-      const res = await fetch(proxyUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ youtubeUrl })
-      });
-      if (res.ok) {
-        const data = await res.json();
-        if (data.buffer) {
-          const buffer = Buffer.from(data.buffer, 'base64');
-          if (buffer.length > 50_000) {
-            console.log(`[Monster] ✓ Proxy fallback succeeded`);
-            return {
-              buffer,
-              title: data.title,
-              artist: data.artist,
-              duration: data.duration,
-              thumbnailUrl: data.thumbnailUrl,
-            };
-          }
-        }
-      }
-    }
-  } catch (e: any) {
-    debugLogs.push(`proxy: ${e.message}`);
   }
 
   throw new Error(`Cloud extraction failed. Logs: ${debugLogs.join(' | ')}`);
